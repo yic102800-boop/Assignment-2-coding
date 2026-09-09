@@ -1,0 +1,60 @@
+//1. Do not implement any decision-making logic; simply continuously output the raw values ​​from the two sensors.
+//2. Observe the approximate values ​​in various real-world scenarios to determine specific thresholds.
+
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+
+Adafruit_MPU6050 mpu;
+
+const int trigPin = 9;
+const int echoPin = 10;
+
+float lastAccelMagnitude = 0;
+
+void setup() {
+  Serial.begin(9600);
+
+  if (!mpu.begin()) {
+    Serial.println("MPU6050 not found!");
+    while (1) delay(10);
+  }
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  Serial.println("=== Calibration Test Start ===");
+  Serial.println("Format: Distance(cm) | Accel Delta");
+}
+
+void loop() {
+  //Ultrasonic_read
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  float distanceCM = duration * 0.034 / 2;
+
+  //MPU6050_read
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  float accelMagnitude = sqrt(
+    a.acceleration.x * a.acceleration.x +
+    a.acceleration.y * a.acceleration.y +
+    a.acceleration.z * a.acceleration.z
+  );
+
+  float delta = abs(accelMagnitude - lastAccelMagnitude);
+  lastAccelMagnitude = accelMagnitude;
+
+  // Data Record
+  Serial.print(distanceCM);
+  Serial.print(" cm  |  Delta: ");
+  Serial.println(delta, 4); // Keep 4 decimal places.
+
+  delay(200);
+}
