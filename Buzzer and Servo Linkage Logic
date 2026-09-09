@@ -1,0 +1,102 @@
+//Phase 1: The buzzer gradually accelerates over 10 seconds, transitioning from slow to fast and from low to high pitch.
+//Phase 2: After the initial 10 seconds, the servo is triggered; its tapping speed also accelerates from slow to fast over a 10-second period.
+//Phase 3: After this 10-second interval, both the buzzer and the servo maintain their respective maximum speeds continuously, without further change.
+
+#include <Servo.h>
+
+Servo clapServo;
+const int servoPin = 6;
+const int buzzerPin = 7;
+
+unsigned long stageStartTime = 0;   
+const unsigned long rampDuration = 10000; // Each gradient phase lasts 10 seconds (milliseconds)
+
+int currentStage = 1; // 1 = Buzzer, 2 = Servo, 3 = Both
+
+// Buzzer_range
+const int freqStart = 200;
+const int freqEnd = 1500;
+const int beepGapStart = 800;  //SLOW
+const int beepGapEnd = 100;    //FAST
+
+// Servo_Range
+const int clapSpeedStart = 500; // SLOW
+const int clapSpeedEnd = 80;    // FAST
+
+unsigned long lastBeep = 0;
+unsigned long lastClap = 0;
+bool clapToggle = false; // Record
+
+void setup() {
+  Serial.begin(9600);
+  clapServo.attach(servoPin);
+  clapServo.write(0);
+  stageStartTime = millis();
+}
+
+void loop() {
+  unsigned long now = millis();
+  unsigned long elapsed = now - stageStartTime;
+
+  if (currentStage == 1) {
+    // =====Stage 1 = Buzzer =====
+    float progress = (float)elapsed / rampDuration; // 0.0 ~ 1.0
+    if (progress > 1.0) progress = 1.0;
+
+    int freq = freqStart + (freqEnd - freqStart) * progress;
+    int beepGap = beepGapStart + (beepGapEnd - beepGapStart) * progress;
+
+    if (now - lastBeep >= beepGap) {
+      tone(buzzerPin, freq, 100);
+      lastBeep = now;
+      Serial.print("[Stage1] Freq: ");
+      Serial.print(freq);
+      Serial.print("  Gap: ");
+      Serial.println(beepGap);
+    }
+
+    if (elapsed >= rampDuration) {
+      currentStage = 2;
+      stageStartTime = now; // Restart the timer for Servo
+      Serial.println(">>> Buzzer maxed out, servo starts ramping <<<");
+    }
+
+  } else if (currentStage == 2) {
+    // ===== Stage 2 = Servo =====
+    if (now - lastBeep >= beepGapEnd) {
+      tone(buzzerPin, freqEnd, 100);
+      lastBeep = now;
+    }
+
+    float progress = (float)elapsed / rampDuration;
+    if (progress > 1.0) progress = 1.0;
+
+    int clapSpeed = clapSpeedStart + (clapSpeedEnd - clapSpeedStart) * progress;
+
+    if (now - lastClap >= clapSpeed) {
+      clapToggle = !clapToggle;
+      clapServo.write(clapToggle ? 90 : 0);
+      lastClap = now;
+      Serial.print("[Stage2] Clap speed: ");
+      Serial.println(clapSpeed);
+    }
+
+    if (elapsed >= rampDuration) {
+      currentStage = 3;
+      Serial.println(">>> Both maxed out, holding steady <<<");
+    }
+
+  } else {
+    // ===== Stage 3 =Both =====
+    if (now - lastBeep >= beepGapEnd) {
+      tone(buzzerPin, freqEnd, 100);
+      lastBeep = now;
+    }
+
+    if (now - lastClap >= clapSpeedEnd) {
+      clapToggle = !clapToggle;
+      clapServo.write(clapToggle ? 90 : 0);
+      lastClap = now;
+    }
+  }
+}
