@@ -1,0 +1,35 @@
+// Ultrasonic Ranging Module_ Test separately
+
+const int trigPin = 9;
+const int echoPin = 10;
+
+long duration;
+float distanceCM;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+}
+
+void loop() {
+  // Determine the starting level
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+  // Send a 10-microsecond high-level pulse to trigger a distance measurement.
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  // Read the duration of the high-level signal returned by the Echo pin.
+  duration = pulseIn(echoPin, HIGH);
+
+  // Converted to distance (cm): the speed of sound is approximately 340 m/s, divided by 2.
+  distanceCM = duration * 0.034 / 2;
+
+  Serial.print(distanceCM);
+  Serial.println(" cm");
+
+  delay(300);
+}
