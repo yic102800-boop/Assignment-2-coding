@@ -1,0 +1,15 @@
+#include <Servo.h>
+
+Servo clapServo;
+
+void setup() {
+  clapServo.attach(9); 
+}
+
+void loop() {
+  clapServo.write(0);   // Set to 0 degrees 
+  delay(500);
+
+  clapServo.write(90);  // Position it at 90 degrees.
+  delay(500);
+}
