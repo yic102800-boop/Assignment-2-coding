@@ -1,0 +1,97 @@
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Servo.h>
+
+//MPU6050
+Adafruit_MPU6050 mpu;
+bool mpuOK = false;
+
+//Ultrasonic Sensor
+const int trigPin = 9;
+const int echoPin = 10;
+
+//Servo
+Servo clapServo;
+const int servoPin = 6;
+
+//Buzzer
+const int buzzerPin = 7;
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("=== System Test Start ===");
+
+  //Initialize MPU6050
+  if (!mpu.begin()) {
+    Serial.println("[MPU6050] NOT FOUND");
+    mpuOK = false;
+  } else {
+    Serial.println("[MPU6050] OK");
+    mpuOK = true;
+  }
+
+  //Initialize Ultrasonic Sensor
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  Serial.println("[Ultrasonic] Pins set");
+
+  //Initialize Servo
+  clapServo.attach(servoPin);
+  Serial.println("[Servo] Attached");
+
+  //Initialize buzzer
+  pinMode(buzzerPin, OUTPUT);
+  Serial.println("[Buzzer] Pin set");
+
+  Serial.println("=== Setup Complete, entering loop ===\n");
+  delay(1000);
+}
+
+void loop() {
+  Serial.println("---- New Test Cycle ----");
+
+  //Test 1: MPU6050 Readings
+  if (mpuOK) {
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+    Serial.print("[MPU6050] X:");
+    Serial.print(a.acceleration.x);
+    Serial.print(" Y:");
+    Serial.print(a.acceleration.y);
+    Serial.print(" Z:");
+    Serial.println(a.acceleration.z);
+  } else {
+    Serial.println("[MPU6050] Skipped (not found)");
+  }
+
+  //Test 2: Ultrasonic Readings
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH, 30000); 
+  float distanceCM = duration * 0.034 / 2;
+
+  Serial.print("[Ultrasonic] Distance: ");
+  Serial.print(distanceCM);
+  Serial.println(" cm");
+
+  //Test 3: Servo Movement
+  Serial.println("[Servo] Moving to 0 -> 90");
+  clapServo.write(0);
+  delay(300);
+  clapServo.write(90);
+  delay(300);
+
+  //Test 4: Buzzer
+  Serial.println("[Buzzer] Beep");
+  digitalWrite(buzzerPin, HIGH);
+  delay(200);
+  digitalWrite(buzzerPin, LOW);
+
+  Serial.println("---- Cycle End ----\n");
+  delay(3000); // There is a 3-second interval between test rounds.
+}
