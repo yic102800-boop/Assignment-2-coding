@@ -1,0 +1,28 @@
+#include <Servo.h>
+
+Servo clapServo;
+
+int clapAngle = 10;      // Initial swing amplitude (weak)
+int maxAngle = 90;       // Maximum oscillation amplitude (strong)
+int step = 5;            // The increase in amplitude after each strike
+
+void setup() {
+  clapServo.attach(9);
+}
+
+void loop() {
+  // open
+  clapServo.write(0);
+  delay(150);
+
+  // Slapping motion; the amplitude varies with clapAngle.
+  clapServo.write(clapAngle);
+  delay(150);
+
+  // The amplitude gradually increases, simulating the action of "hitting harder and harder."
+  if (clapAngle < maxAngle) {
+    clapAngle += step;
+  }
+
+  delay(200); // Striking interval
+}
