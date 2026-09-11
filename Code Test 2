@@ -1,0 +1,225 @@
+//Modifications based on the details of Code Test 1.
+//The key adjustments are as follows:
+//1. Adjusted the MPU detection intensity to monitor activity over a specific time interval.
+//2. Modified the buzzer trigger mechanism to activate randomly within a 0–60 second window (creating unpredictability regarding when the device interrupts the worker).
+//3. Modified the MPU detection logic so that the buzzer activates only after multiple movement events are detected.
+
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Servo.h>
+
+// Hardware Objects
+Adafruit_MPU6050 mpu;
+Servo clapServo;
+
+const int trigPin = 9;
+const int echoPin = 10;
+const int servoPin = 6;
+const int buzzerPin = 7;
+
+// MPU6050
+float lastAccelMagnitude = 0;
+const float MOTION_PEAK_THRESHOLD = 0.3;
+const unsigned long MOTION_WINDOW = 60000;
+const int MOTION_COUNT_REQUIRED = 5;
+
+const int MAX_MOTION_LOG = 20;
+unsigned long motionTimestamps[MAX_MOTION_LOG];
+int motionLogIndex = 0;
+bool isWorking = false;
+
+// Ultrasonic
+const float DISTANCE_THRESHOLD = 30.0;
+const int DEBOUNCE_COUNT = 3;
+int presentCounter = 0;
+int awayCounter = 0;
+bool isPresent = true;
+
+// Time management logic
+float focusTime = 0;
+const float WAIT_DURATION = 10000;
+const float STAGE1_DURATION = 10000;
+const float STAGE2_DURATION = 10000;
+const float MAX_FOCUS_TIME = WAIT_DURATION + STAGE1_DURATION + STAGE2_DURATION;
+
+// Buzzer parameter range
+const int freqStart = 200;
+const int freqEnd = 1500;
+const int beepGapStart = 800;
+const int beepGapEnd = 100;
+unsigned long lastBeep = 0;
+
+// Servo parameter range
+const int clapSpeedStart = 500;
+const int clapSpeedEnd = 80;
+unsigned long lastClap = 0;
+bool clapToggle = false;
+
+
+unsigned long lastTick = 0;
+const unsigned long tickInterval = 100;
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("=== System Initializing ===");
+
+  Wire.begin();
+  Wire.setWireTimeout(3000, true);
+
+  if (!mpu.begin()) {
+    Serial.println("[MPU6050] NOT FOUND - check wiring");
+    while (1) delay(10);
+  }
+  Serial.println("[MPU6050] OK");
+
+  for (int i = 0; i < MAX_MOTION_LOG; i++) motionTimestamps[i] = 0;
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  Serial.println("[Ultrasonic] Pins set");
+
+  clapServo.attach(servoPin);
+  clapServo.write(0);
+  Serial.println("[Servo] Attached");
+
+  pinMode(buzzerPin, OUTPUT);
+  Serial.println("[Buzzer] Pin set");
+
+  Serial.println("=== Setup Complete ===\n");
+}
+
+void loop() {
+  unsigned long now = millis();
+  if (now - lastTick < tickInterval) return;
+  float dt = now - lastTick;
+  lastTick = now;
+
+  readMPU();
+  readUltrasonic();
+  updateFocusState(dt);
+  updateBuzzer(now);
+  updateServo(now);
+
+  Serial.print("Working:"); Serial.print(isWorking);
+  Serial.print(" Present:"); Serial.print(isPresent);
+  Serial.print(" FocusTime:"); Serial.print(focusTime);
+  Serial.print(" Phase:"); Serial.println(getPhaseLabel());
+}
+
+
+void readMPU() {
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  if (Wire.getWireTimeoutFlag()) {
+    Serial.println("[MPU6050] I2C timeout, skipping this reading");
+    Wire.clearWireTimeoutFlag();
+    return;
+  }
+
+  float accelMagnitude = sqrt(
+    a.acceleration.x * a.acceleration.x +
+    a.acceleration.y * a.acceleration.y +
+    a.acceleration.z * a.acceleration.z
+  );
+
+  float delta = abs(accelMagnitude - lastAccelMagnitude);
+  lastAccelMagnitude = accelMagnitude;
+
+  if (delta >= MOTION_PEAK_THRESHOLD) {
+    motionTimestamps[motionLogIndex] = millis();
+    motionLogIndex = (motionLogIndex + 1) % MAX_MOTION_LOG;
+  }
+
+  unsigned long now = millis();
+  int recentCount = 0;
+  for (int i = 0; i < MAX_MOTION_LOG; i++) {
+    if (motionTimestamps[i] != 0 && (now - motionTimestamps[i] <= MOTION_WINDOW)) {
+      recentCount++;
+    }
+  }
+
+  isWorking = (recentCount >= MOTION_COUNT_REQUIRED);
+}
+
+void readUltrasonic() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  float distanceCM = duration * 0.034 / 2;
+
+  if (distanceCM > 0 && distanceCM <= DISTANCE_THRESHOLD) {
+    presentCounter++;
+    awayCounter = 0;
+    if (presentCounter >= DEBOUNCE_COUNT) isPresent = true;
+  } else {
+    awayCounter++;
+    presentCounter = 0;
+    if (awayCounter >= DEBOUNCE_COUNT) isPresent = false;
+  }
+}
+
+void updateFocusState(float dt) {
+  if (!isPresent) {
+    focusTime -= dt * 3;
+  } else if (isWorking) {
+    focusTime += dt;
+  }
+
+  if (focusTime < 0) focusTime = 0;
+}
+
+void updateBuzzer(unsigned long now) {
+  if (focusTime <= WAIT_DURATION) {
+    return;
+  }
+
+  int freq, beepGap;
+
+  if (focusTime <= WAIT_DURATION + STAGE1_DURATION) {
+    float progress = (focusTime - WAIT_DURATION) / STAGE1_DURATION;
+    freq = freqStart + (freqEnd - freqStart) * progress;
+    beepGap = beepGapStart + (beepGapEnd - beepGapStart) * progress;
+  } else {
+    freq = freqEnd;
+    beepGap = beepGapEnd;
+  }
+
+  if (now - lastBeep >= beepGap) {
+    tone(buzzerPin, freq, 100);
+    lastBeep = now;
+  }
+}
+
+void updateServo(unsigned long now) {
+  if (focusTime <= WAIT_DURATION + STAGE1_DURATION) {
+    clapServo.write(0);
+    return;
+  }
+
+  int clapSpeed;
+  if (focusTime < MAX_FOCUS_TIME) {
+    float progress = (focusTime - WAIT_DURATION - STAGE1_DURATION) / STAGE2_DURATION;
+    clapSpeed = clapSpeedStart + (clapSpeedEnd - clapSpeedStart) * progress;
+  } else {
+    clapSpeed = clapSpeedEnd;
+  }
+
+  if (now - lastClap >= clapSpeed) {
+    clapToggle = !clapToggle;
+    clapServo.write(clapToggle ? 90 : 0);
+    lastClap = now;
+  }
+}
+
+String getPhaseLabel() {
+  if (focusTime <= WAIT_DURATION) return "Waiting";
+  if (focusTime <= WAIT_DURATION + STAGE1_DURATION) return "Buzzer Ramping";
+  if (focusTime < MAX_FOCUS_TIME) return "Servo Ramping";
+  return "Max Alert";
+}
