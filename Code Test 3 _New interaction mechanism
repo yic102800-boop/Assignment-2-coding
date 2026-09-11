@@ -1,0 +1,344 @@
+New feature added: Interaction mechanism with the buzzer.
+
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Servo.h>
+
+Adafruit_MPU6050 mpu;
+Servo clapServo;
+
+const int trigPin = 9;
+const int echoPin = 10;
+const int servoPin = 6;
+const int buzzerPin = 7;
+const int buttonPin = 8;
+
+// ===== MPU6050 =====
+float lastAccelMagnitude = 0;
+const float MOTION_PEAK_THRESHOLD = 0.3;
+const unsigned long MOTION_WINDOW = 60000;
+const int MOTION_COUNT_REQUIRED = 5;
+const int MAX_MOTION_LOG = 20;
+unsigned long motionTimestamps[MAX_MOTION_LOG];
+int motionLogIndex = 0;
+bool isWorking = false;
+
+// ===== 超声波 =====
+const float DISTANCE_THRESHOLD = 30.0;
+const int DEBOUNCE_COUNT = 3;
+int presentCounter = 0;
+int awayCounter = 0;
+bool isPresent = true;
+
+// ===== 离开后强制停止倒计时 =====
+unsigned long awayStartTime = 0;
+bool awayTimerActive = false;
+const unsigned long AWAY_STOP_DELAY = 2000; // 2秒
+
+// ===== 专注值 =====
+float focusTime = 0;
+const float WAIT_DURATION = 10000;
+const float STAGE1_DURATION = 10000;
+const float STAGE2_DURATION = 10000;
+
+// ===== 蜂鸣器 =====
+const int freqStart = 200;
+const int freqEnd = 1500;
+const int beepGapStart = 800;
+const int beepGapEnd = 100;
+unsigned long lastBeep = 0;
+unsigned long buzzerStartTime = 0;
+bool buzzerStarted = false;
+
+// ===== 按钮静音机制 =====
+bool buzzerMuted = false;
+unsigned long muteStartTime = 0;
+unsigned long muteDuration = 0;
+int pressCount = 0;
+int silenceLimit = 0;
+bool silenceLimitSet = false;
+
+int buttonState = HIGH;
+int lastButtonReading = HIGH;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
+// ===== 舵机 =====
+const int clapSpeedStart = 500;
+const int clapSpeedEnd = 80;
+unsigned long lastClap = 0;
+bool clapToggle = false;
+bool servoTriggered = false;
+unsigned long servoStartTime = 0;
+
+// ===== 主循环节流 =====
+unsigned long lastTick = 0;
+const unsigned long tickInterval = 100;
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("=== System Initializing ===");
+
+  Wire.begin();
+  Wire.setWireTimeout(3000, true);
+
+  if (!mpu.begin()) {
+    Serial.println("[MPU6050] NOT FOUND - check wiring");
+    while (1) delay(10);
+  }
+  Serial.println("[MPU6050] OK");
+
+  for (int i = 0; i < MAX_MOTION_LOG; i++) motionTimestamps[i] = 0;
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  Serial.println("[Ultrasonic] Pins set");
+
+  clapServo.attach(servoPin);
+  clapServo.write(0);
+  Serial.println("[Servo] Attached");
+
+  pinMode(buzzerPin, OUTPUT);
+  Serial.println("[Buzzer] Pin set");
+
+  pinMode(buttonPin, INPUT_PULLUP);
+  Serial.println("[Button] Pin set");
+
+  randomSeed(analogRead(A0));
+
+  Serial.println("=== Setup Complete ===\n");
+}
+
+void loop() {
+  checkButton();
+
+  unsigned long now = millis();
+  if (now - lastTick < tickInterval) return;
+  float dt = now - lastTick;
+  lastTick = now;
+
+  readMPU();
+  readUltrasonic();
+  updateFocusState(dt);
+  updateBuzzer(now);
+  updateServo(now);
+
+  Serial.print("Working:"); Serial.print(isWorking);
+  Serial.print(" Present:"); Serial.print(isPresent);
+  Serial.print(" FocusTime:"); Serial.print(focusTime);
+  Serial.print(" Muted:"); Serial.print(buzzerMuted);
+  Serial.print(" Press:"); Serial.print(pressCount);
+  Serial.print("/"); Serial.print(silenceLimitSet ? silenceLimit : 0);
+  Serial.print(" ServoTriggered:"); Serial.println(servoTriggered);
+}
+
+// ================================================================
+
+void checkButton() {
+  int reading = digitalRead(buttonPin);
+
+  if (reading != lastButtonReading) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading != buttonState) {
+      buttonState = reading;
+      if (buttonState == LOW) {
+        onButtonPress();
+      }
+    }
+  }
+
+  lastButtonReading = reading;
+}
+
+void onButtonPress() {
+  if (focusTime <= WAIT_DURATION) {
+    Serial.println("[Button] Pressed, but buzzer not active yet - ignored");
+    return;
+  }
+
+  if (servoTriggered) {
+    Serial.println("[Button] Servo already triggered - ignored");
+    return;
+  }
+
+  if (!silenceLimitSet) {
+    silenceLimit = random(2, 6);
+    silenceLimitSet = true;
+    Serial.print("[Button] Silence limit set to: ");
+    Serial.println(silenceLimit);
+  }
+
+  if (pressCount < silenceLimit) {
+    pressCount++;
+    buzzerMuted = true;
+    muteStartTime = millis();
+    muteDuration = random(2000, 5001);
+    Serial.print("[Button] Muted for ");
+    Serial.print(muteDuration);
+    Serial.print("ms  (");
+    Serial.print(pressCount);
+    Serial.print("/");
+    Serial.print(silenceLimit);
+    Serial.println(")");
+  } else {
+    servoTriggered = true;
+    servoStartTime = millis();
+    Serial.println("[Button] Limit exceeded! Servo triggered!");
+  }
+}
+
+void readMPU() {
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  if (Wire.getWireTimeoutFlag()) {
+    Serial.println("[MPU6050] I2C timeout, skipping this reading");
+    Wire.clearWireTimeoutFlag();
+    return;
+  }
+
+  float accelMagnitude = sqrt(
+    a.acceleration.x * a.acceleration.x +
+    a.acceleration.y * a.acceleration.y +
+    a.acceleration.z * a.acceleration.z
+  );
+
+  float delta = abs(accelMagnitude - lastAccelMagnitude);
+  lastAccelMagnitude = accelMagnitude;
+
+  if (delta >= MOTION_PEAK_THRESHOLD) {
+    motionTimestamps[motionLogIndex] = millis();
+    motionLogIndex = (motionLogIndex + 1) % MAX_MOTION_LOG;
+  }
+
+  unsigned long now = millis();
+  int recentCount = 0;
+  for (int i = 0; i < MAX_MOTION_LOG; i++) {
+    if (motionTimestamps[i] != 0 && (now - motionTimestamps[i] <= MOTION_WINDOW)) {
+      recentCount++;
+    }
+  }
+
+  isWorking = (recentCount >= MOTION_COUNT_REQUIRED);
+}
+
+void readUltrasonic() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  float distanceCM = duration * 0.034 / 2;
+
+  if (distanceCM > 0 && distanceCM <= DISTANCE_THRESHOLD) {
+    presentCounter++;
+    awayCounter = 0;
+    if (presentCounter >= DEBOUNCE_COUNT) isPresent = true;
+  } else {
+    awayCounter++;
+    presentCounter = 0;
+    if (awayCounter >= DEBOUNCE_COUNT) isPresent = false;
+  }
+}
+
+void updateFocusState(float dt) {
+  if (!isPresent) {
+    // 人已离开：开始/继续2秒倒计时，focusTime暂时冻结
+    if (!awayTimerActive) {
+      awayTimerActive = true;
+      awayStartTime = millis();
+      Serial.println("[System] Person left - 2s countdown to force stop started");
+    } else if (millis() - awayStartTime >= AWAY_STOP_DELAY) {
+      forceStopAll();
+    }
+  } else {
+    // 人还在场：取消倒计时，正常累积
+    awayTimerActive = false;
+    if (isWorking) {
+      focusTime += dt;
+    }
+  }
+
+  if (focusTime < 0) focusTime = 0;
+}
+
+void forceStopAll() {
+  noTone(buzzerPin);
+  clapServo.write(0);
+
+  focusTime = 0;
+  servoTriggered = false;
+  buzzerStarted = false;
+  buzzerMuted = false;
+  pressCount = 0;
+  silenceLimitSet = false;
+  awayTimerActive = false;
+
+  Serial.println("[System] Force stopped - everything reset");
+}
+
+void updateBuzzer(unsigned long now) {
+  if (focusTime <= WAIT_DURATION) {
+    buzzerStarted = false;
+    return;
+  }
+
+  if (!buzzerStarted) {
+    buzzerStarted = true;
+    buzzerStartTime = now;
+  }
+
+  if (buzzerMuted) {
+    if (now - muteStartTime >= muteDuration) {
+      buzzerMuted = false;
+    } else {
+      return;
+    }
+  }
+
+  unsigned long buzzerElapsed = now - buzzerStartTime;
+  int freq, beepGap;
+
+  if (buzzerElapsed <= STAGE1_DURATION) {
+    float progress = (float)buzzerElapsed / STAGE1_DURATION;
+    freq = freqStart + (freqEnd - freqStart) * progress;
+    beepGap = beepGapStart + (beepGapEnd - beepGapStart) * progress;
+  } else {
+    freq = freqEnd;
+    beepGap = beepGapEnd;
+  }
+
+  if (now - lastBeep >= beepGap) {
+    tone(buzzerPin, freq, 100);
+    lastBeep = now;
+  }
+}
+
+void updateServo(unsigned long now) {
+  if (!servoTriggered) {
+    clapServo.write(0);
+    return;
+  }
+
+  unsigned long servoElapsed = now - servoStartTime;
+  int clapSpeed;
+
+  if (servoElapsed < STAGE2_DURATION) {
+    float progress = (float)servoElapsed / STAGE2_DURATION;
+    clapSpeed = clapSpeedStart + (clapSpeedEnd - clapSpeedStart) * progress;
+  } else {
+    clapSpeed = clapSpeedEnd;
+  }
+
+  if (now - lastClap >= clapSpeed) {
+    clapToggle = !clapToggle;
+    clapServo.write(clapToggle ? 90 : 0);
+    lastClap = now;
+  }
+}
