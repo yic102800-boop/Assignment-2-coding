@@ -1,4 +1,7 @@
-New feature added: Interaction mechanism with the buzzer.
+//New feature added: Interaction mechanism with the buzzer.
+//Here is the final, complete code. The following adjustments were made:
+//1. Added an interaction feature for when the buzzer is active: users can press the button to pause it briefly, though they cannot interrupt the overall process.
+//2. Modified the stopping logic triggered by "departure": changed from a gradual stop to an immediate stop within 2 seconds of detecting that the person has left.
 
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
@@ -14,7 +17,7 @@ const int servoPin = 6;
 const int buzzerPin = 7;
 const int buttonPin = 8;
 
-// ===== MPU6050 =====
+//MPU6050
 float lastAccelMagnitude = 0;
 const float MOTION_PEAK_THRESHOLD = 0.3;
 const unsigned long MOTION_WINDOW = 60000;
@@ -24,25 +27,25 @@ unsigned long motionTimestamps[MAX_MOTION_LOG];
 int motionLogIndex = 0;
 bool isWorking = false;
 
-// ===== 超声波 =====
+//Ultrasonic
 const float DISTANCE_THRESHOLD = 30.0;
 const int DEBOUNCE_COUNT = 3;
 int presentCounter = 0;
 int awayCounter = 0;
 bool isPresent = true;
 
-// ===== 离开后强制停止倒计时 =====
+//Stop countdown upon leaving
 unsigned long awayStartTime = 0;
 bool awayTimerActive = false;
 const unsigned long AWAY_STOP_DELAY = 2000; // 2秒
 
-// ===== 专注值 =====
+//Focus Time
 float focusTime = 0;
 const float WAIT_DURATION = 10000;
 const float STAGE1_DURATION = 10000;
 const float STAGE2_DURATION = 10000;
 
-// ===== 蜂鸣器 =====
+//Buzzer
 const int freqStart = 200;
 const int freqEnd = 1500;
 const int beepGapStart = 800;
@@ -51,7 +54,7 @@ unsigned long lastBeep = 0;
 unsigned long buzzerStartTime = 0;
 bool buzzerStarted = false;
 
-// ===== 按钮静音机制 =====
+// Button Muting Mechanism
 bool buzzerMuted = false;
 unsigned long muteStartTime = 0;
 unsigned long muteDuration = 0;
@@ -64,7 +67,7 @@ int lastButtonReading = HIGH;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50;
 
-// ===== 舵机 =====
+//Servo
 const int clapSpeedStart = 500;
 const int clapSpeedEnd = 80;
 unsigned long lastClap = 0;
@@ -72,7 +75,7 @@ bool clapToggle = false;
 bool servoTriggered = false;
 unsigned long servoStartTime = 0;
 
-// ===== 主循环节流 =====
+// Main Loop
 unsigned long lastTick = 0;
 const unsigned long tickInterval = 100;
 
@@ -249,7 +252,7 @@ void readUltrasonic() {
 
 void updateFocusState(float dt) {
   if (!isPresent) {
-    // 人已离开：开始/继续2秒倒计时，focusTime暂时冻结
+    // User has left: Start/resume 2-second countdown; focusTime is temporarily frozen.
     if (!awayTimerActive) {
       awayTimerActive = true;
       awayStartTime = millis();
@@ -258,7 +261,7 @@ void updateFocusState(float dt) {
       forceStopAll();
     }
   } else {
-    // 人还在场：取消倒计时，正常累积
+    // User still present: countdown cancelled, accumulation continues as normal.
     awayTimerActive = false;
     if (isWorking) {
       focusTime += dt;
